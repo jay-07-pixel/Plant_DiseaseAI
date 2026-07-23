@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project artifacts
+logs/
+weights/
+*.pth
+*.pt
+*.onnx
+datasets/grape/raw/
+datasets/grape/processed/
+datasets/grape/train/
+datasets/grape/val/
+datasets/grape/test/
+datasets/grape/reports/
+datasets/tomato/raw/
+datasets/tomato/processed/
+datasets/tomato/train/
+datasets/tomato/balanced_train/
+datasets/tomato/split/
+datasets/tomato/reports/
+datasets/potato/raw/
+exports/
+outputs/
+debug/
+PlantVillage-Dataset/
+.vendor/
+dist/
+build/
+PlantDiseaseAI.spec
+*.png
+*.jpg
+!resources/**
+!desktop_app/resources/**
+
+# TensorBoard
+runs/
+events.out.tfevents.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

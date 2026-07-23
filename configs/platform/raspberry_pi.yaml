@@ -1,0 +1,18 @@
+# Auto-applied on Raspberry Pi (Linux ARM) at runtime.
+
+device:
+  preferred: cpu
+  auto_select: true
+
+desktop_app:
+  camera:
+    backend: auto
+    index: 0
+    device_path: null
+    width: 640
+    height: 480
+    warmup_frames: 8
+
+inference:
+  # Grad-CAM is CPU-heavy on Pi; set PLANT_DISEASE_ENABLE_GRADCAM=1 to force it on.
+  enable_gradcam: false
