@@ -29,37 +29,51 @@ ENV/
 *.swp
 *.swo
 
-# Project artifacts
+# Project artifacts — keep bulk data out, ship runtime essentials (see bottom)
 logs/
-weights/
-*.pth
-*.pt
-*.onnx
+outputs/
+debug/
+exports/
+PlantVillage-Dataset/
+.vendor/
+PlantDiseaseAI.spec
+
+# Dataset images and training splits (large — not needed to run the desktop app)
 datasets/grape/raw/
 datasets/grape/processed/
 datasets/grape/train/
 datasets/grape/val/
 datasets/grape/test/
-datasets/grape/reports/
 datasets/tomato/raw/
 datasets/tomato/processed/
 datasets/tomato/train/
 datasets/tomato/balanced_train/
 datasets/tomato/split/
-datasets/tomato/reports/
 datasets/potato/raw/
-exports/
-outputs/
-debug/
-PlantVillage-Dataset/
-.vendor/
-dist/
-build/
-PlantDiseaseAI.spec
+
+# Ignore most weight/checkpoint files except production best models (tracked below)
+weights/**/*
+!weights/grape/
+!weights/grape/best_model.pth
+!weights/tomato/
+!weights/tomato/best_model.pth
+
+*.pth
+!weights/grape/best_model.pth
+!weights/tomato/best_model.pth
+*.pt
+*.onnx
+
+# Ignore report outputs except class mappings required at inference
+datasets/grape/reports/*
+!datasets/grape/reports/class_mapping.json
+datasets/tomato/reports/*
+!datasets/tomato/reports/class_mapping.json
+
+# Generated images
 *.png
 *.jpg
 !resources/**
-!desktop_app/resources/**
 
 # TensorBoard
 runs/
@@ -69,7 +83,7 @@ events.out.tfevents.*
 .DS_Store
 Thumbs.db
 
-# Environment
+# Environment — never commit secrets
 .env
 .env.local
 

@@ -24,7 +24,7 @@ Production-grade **offline desktop application** for multi-crop plant leaf disea
 | Tomato | 10      | 256×256    | EfficientNet-B0  | Production    |
 | Potato | 3       | —          | —                | Audit only    |
 
-> Model weights (`weights/`) are **not included** in this repository due to size. Train locally or copy your trained checkpoints into `weights/grape/` and `weights/tomato/`.
+> **Clone & run:** Model weights and class mappings are included in this repo so the desktop app works immediately after setup.
 
 ## Quick Start
 
@@ -33,37 +33,36 @@ Production-grade **offline desktop application** for multi-crop plant leaf disea
 ```bash
 git clone https://github.com/jay-07-pixel/Plant_DiseaseAI.git
 cd Plant_DiseaseAI
+```
+
+**Windows (PowerShell):**
+```powershell
+.\scripts\setup.ps1
+python scripts\run_app.py
+```
+
+**Linux / macOS / Raspberry Pi:**
+```bash
+chmod +x scripts/setup.sh
+./scripts/setup.sh
+python scripts/run_app.py
+```
+
+**Manual install:**
+```bash
 python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-
-# Linux / Raspberry Pi
-source .venv/bin/activate
-
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+python scripts/run_app.py
 ```
 
 ### 2. Configure environment (optional — for AI tips)
 
-```bash
-copy .env.example .env   # Windows
-# Set GROQ_API_KEY in .env
-```
+Copy `.env.example` to `.env` and set `GROQ_API_KEY`.
 
-### 3. Add model weights
-
-Place trained checkpoints at:
-
-```
-weights/grape/best_model.pth
-weights/tomato/best_model.pth
-```
-
-### 4. Run the desktop app
+### 3. Run with a specific crop
 
 ```bash
-python scripts/run_app.py
 python scripts/run_app.py --crop tomato
 ```
 
