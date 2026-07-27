@@ -49,3 +49,21 @@ def is_raspberry_pi() -> bool:
             pass
 
     return False
+
+
+def append_pi_system_packages() -> None:
+    """Expose apt-only Pi packages (e.g. picamera2) without overriding venv deps.
+
+    Do not set PYTHONPATH to /usr/lib/python3/dist-packages — that prepends old
+    system packages like typing_extensions and breaks pydantic/albumentations.
+    """
+    if not is_raspberry_pi():
+        return
+
+    dist_packages = Path("/usr/lib/python3/dist-packages")
+    if not dist_packages.is_dir():
+        return
+
+    dist_str = str(dist_packages)
+    if dist_str not in sys.path:
+        sys.path.append(dist_str)

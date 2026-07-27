@@ -10,9 +10,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from utils.platform import append_pi_system_packages, is_raspberry_pi
+
+append_pi_system_packages()
+
 from desktop_app.services.camera_service import create_camera_backend
 from utils.config import apply_platform_overrides, load_config
-from utils.platform import is_raspberry_pi
 
 
 def main() -> int:
