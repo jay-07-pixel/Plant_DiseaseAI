@@ -13,8 +13,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DIST_NAME = "PlantDiseaseAI"
 ENTRY = PROJECT_ROOT / "scripts" / "run_app.py"
+ICON = PROJECT_ROOT / "resources" / "app_icon.ico"
 BUILD_DIR = PROJECT_ROOT / "build"
 DIST_DIR = PROJECT_ROOT / "dist"
+SHORTCUT_NAME = f"{DIST_NAME}.lnk"
 
 BUNDLE_PATHS = [
     ("configs", "configs"),
@@ -58,6 +60,8 @@ def _validate_assets() -> None:
         raise FileNotFoundError(
             "Missing files required for the desktop build:\n" + "\n".join(f"  - {item}" for item in missing)
         )
+    if not ICON.exists():
+        raise FileNotFoundError(f"Missing application icon: {ICON}")
 
 
 def _copy_runtime_assets(target_root: Path) -> None:
@@ -85,13 +89,56 @@ def _desktop_dir() -> Path:
     return Path.home() / "Desktop"
 
 
+def _remove_tree(path: Path) -> None:
+    """Remove a directory tree, clearing read-only files on Windows."""
+    if not path.exists():
+        return
+
+    def _onerror(func, target, exc_info):
+        import stat
+
+        if not path.exists():
+            return
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except OSError:
+            raise exc_info[1] from exc_info[1]
+
+    shutil.rmtree(path, onerror=_onerror)
+
+
 def deploy_to_desktop(app_dir: Path) -> Path:
     """Copy the built application folder to the user's Desktop."""
     target = _desktop_dir() / DIST_NAME
-    if target.exists():
-        shutil.rmtree(target)
+    _remove_tree(target)
     shutil.copytree(app_dir, target)
-    return target / f"{DIST_NAME}.exe"
+    exe_path = target / f"{DIST_NAME}.exe"
+    if ICON.exists():
+        shutil.copy2(ICON, target / "app_icon.ico")
+    _create_desktop_shortcut(exe_path, icon_path=target / "app_icon.ico" if ICON.exists() else exe_path)
+    return exe_path
+
+
+def _create_desktop_shortcut(exe_path: Path, *, icon_path: Path | None = None) -> Path:
+    """Create a Desktop shortcut that launches the bundled app with the app icon."""
+    desktop = _desktop_dir()
+    shortcut_path = desktop / SHORTCUT_NAME
+    icon = icon_path or (ICON if ICON.exists() else exe_path)
+    ps_script = f"""
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut('{shortcut_path}')
+$shortcut.TargetPath = '{exe_path}'
+$shortcut.WorkingDirectory = '{exe_path.parent}'
+$shortcut.IconLocation = '{icon},0'
+$shortcut.Description = 'Plant Disease AI - Grape and Tomato disease detection'
+$shortcut.Save()
+"""
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps_script],
+        check=True,
+    )
+    return shortcut_path
 
 
 def _pyinstaller_command() -> list[str]:
@@ -110,6 +157,8 @@ def _pyinstaller_command() -> list[str]:
         DIST_NAME,
         "--onedir",
         "--windowed",
+        "--icon",
+        str(ICON),
         "--paths",
         str(PROJECT_ROOT),
         *add_data,
@@ -129,6 +178,12 @@ def _pyinstaller_command() -> list[str]:
         "cv2",
         "--hidden-import",
         "albumentations",
+        "--hidden-import",
+        "scipy",
+        "--hidden-import",
+        "scipy.ndimage",
+        "--hidden-import",
+        "scipy.special",
         "--hidden-import",
         "groq",
         "--hidden-import",
@@ -161,8 +216,6 @@ def _pyinstaller_command() -> list[str]:
         "tensorflow",
         "--exclude-module",
         "sklearn",
-        "--exclude-module",
-        "scipy",
         "--exclude-module",
         "torchaudio",
         "--exclude-module",
@@ -201,9 +254,11 @@ def build(*, clean: bool = True, deploy_desktop: bool = True) -> Path:
     if deploy_desktop:
         desktop_exe = deploy_to_desktop(app_dir)
         desktop_folder = desktop_exe.parent
+        shortcut_path = _desktop_dir() / SHORTCUT_NAME
         print()
         print("Copied to Desktop.")
         print(f"  Desktop EXE: {desktop_exe}")
+        print(f"  Shortcut:    {shortcut_path}")
         print(f"  EXE size:    {_format_size(desktop_exe.stat().st_size)}")
         print(f"  Folder size: {_format_size(_dir_size(desktop_folder))}")
         print(f"  Folder path: {desktop_folder}")
