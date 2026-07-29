@@ -108,6 +108,8 @@ class AppController:
     def on_capture(self) -> None:
         dialog = CameraCaptureDialog(self.config, self.window.translator, self.window)
         if dialog.exec() and dialog.captured_path:
+            # Capture file is under project_root/logs/captures (pendrive when app
+            # is launched from the USB project folder).
             self.run_inference(dialog.captured_path)
 
     def run_inference(self, image_path: Path) -> None:

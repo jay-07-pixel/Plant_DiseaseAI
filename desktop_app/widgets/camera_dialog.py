@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLa
 from desktop_app.i18n import Translator
 from desktop_app.services.camera_service import CameraBackend, create_camera_backend
 from utils.config import AppConfig
+from utils.platform import is_raspberry_pi
 
 
 class CameraCaptureDialog(QDialog):
@@ -30,13 +31,24 @@ class CameraCaptureDialog(QDialog):
         self.captured_path: Path | None = None
         self._camera: CameraBackend | None = None
         self._timer = QTimer(self)
+        self._on_pi = is_raspberry_pi()
 
-        self.setFixedSize(640, 520)
+        # Smaller dialog / slower preview on Pi to avoid OOM crashes.
+        if self._on_pi:
+            self.setFixedSize(520, 440)
+            preview_min = (480, 320)
+            self._preview_interval_ms = 150
+            self._scale_mode = Qt.TransformationMode.FastTransformation
+        else:
+            self.setFixedSize(640, 520)
+            preview_min = (600, 400)
+            self._preview_interval_ms = 30
+            self._scale_mode = Qt.TransformationMode.SmoothTransformation
 
         layout = QVBoxLayout(self)
         self.preview = QLabel()
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumSize(600, 400)
+        self.preview.setMinimumSize(*preview_min)
         self.preview.setStyleSheet("background: #F0F2F5; border-radius: 8px;")
 
         btn_row = QHBoxLayout()
@@ -66,51 +78,85 @@ class CameraCaptureDialog(QDialog):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self.preview.setText(self.translator.t("camera.initializing"))
+        # Defer camera open so the dialog paints first (avoids UI freeze on Pi).
+        QTimer.singleShot(50, self._open_camera)
+
+    def _open_camera(self) -> None:
+        if self._camera is not None:
+            return
         self._camera = create_camera_backend(self.config)
         if self._camera is None or not self._camera.is_open:
             self.preview.setText(self.translator.t("camera.not_available"))
             self.capture_btn.setEnabled(False)
             return
+        self._timer.start(self._preview_interval_ms)
 
-        self.preview.setText(self.translator.t("camera.initializing"))
-        self._timer.start(30)
-
-    def closeEvent(self, event) -> None:
+    def _release_camera(self) -> None:
         self._timer.stop()
         if self._camera is not None:
             self._camera.close()
             self._camera = None
+
+    def closeEvent(self, event) -> None:
+        self._release_camera()
         super().closeEvent(event)
+
+    def reject(self) -> None:
+        self._release_camera()
+        super().reject()
 
     def _frame_to_pixmap(self, rgb_frame) -> QPixmap:
         h, w, ch = rgb_frame.shape
+        if ch != 3:
+            return QPixmap()
         image = QImage(rgb_frame.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
         return QPixmap.fromImage(image).scaled(
             self.preview.width(),
             self.preview.height(),
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            self._scale_mode,
         )
 
     def _update_frame(self) -> None:
         if self._camera is None:
             return
-        frame = self._camera.read_rgb()
-        if frame is None:
+        try:
+            frame = self._camera.read_rgb()
+            if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
+                return
+            self.preview.setPixmap(self._frame_to_pixmap(frame))
+        except Exception:
+            # Never let a bad frame kill the whole Pi desktop session.
             return
-        self.preview.setPixmap(self._frame_to_pixmap(frame))
+
+    def _capture_dir(self) -> Path:
+        """Always save under the project folder (pendrive when app runs from USB)."""
+        capture_dir = self.config.project_root / "logs" / "captures"
+        capture_dir.mkdir(parents=True, exist_ok=True)
+        return capture_dir
 
     def _capture(self) -> None:
         if self._camera is None:
             return
-        frame = self._camera.read_rgb()
-        if frame is None:
+        try:
+            frame = self._camera.read_rgb()
+        except Exception:
+            return
+        if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
             return
 
-        capture_dir = self.config.project_root / "logs" / "captures"
-        capture_dir.mkdir(parents=True, exist_ok=True)
+        capture_dir = self._capture_dir()
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         path = capture_dir / f"capture_{timestamp}.jpg"
-        cv2.imwrite(str(path), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+
+        # Release camera before disk write + inference to free RAM on Pi.
+        self._release_camera()
+
+        ok = cv2.imwrite(str(path), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        if not ok:
+            self.preview.setText(self.translator.t("camera.not_available"))
+            return
+
         self.captured_path = path
         self.accept()

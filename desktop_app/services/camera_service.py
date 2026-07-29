@@ -130,10 +130,28 @@ class Picamera2Backend(CameraBackend):
         self.width = width
         self.height = height
         self._camera = None
+        self._stream_name = "main"
 
     @property
     def is_open(self) -> bool:
         return self._camera is not None
+
+    @staticmethod
+    def _to_rgb_u8(frame: np.ndarray) -> np.ndarray | None:
+        """Normalize Picamera2 buffers to contiguous HxWx3 RGB uint8."""
+        if frame is None:
+            return None
+        arr = np.asarray(frame)
+        if arr.ndim != 3:
+            return None
+        if arr.shape[2] == 4:
+            # Common on Pi: XRGB/BGRX — drop alpha and swap if needed later.
+            arr = arr[:, :, :3]
+        elif arr.shape[2] != 3:
+            return None
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+        return np.ascontiguousarray(arr)
 
     def open(self) -> bool:
         self.close()
@@ -145,13 +163,20 @@ class Picamera2Backend(CameraBackend):
 
         try:
             camera = Picamera2()
+            # Keep buffer count low to reduce RAM pressure on Pi 4/5.
             config = camera.create_preview_configuration(
-                main={"format": "RGB888", "size": (self.width, self.height)}
+                main={"format": "RGB888", "size": (self.width, self.height)},
+                buffer_count=2,
             )
             camera.configure(config)
             camera.start()
             self._camera = camera
-            logger.info("Pi Camera opened via picamera2")
+            self._stream_name = "main"
+            logger.info(
+                "Pi Camera opened via picamera2 | size=%sx%s",
+                self.width,
+                self.height,
+            )
             return True
         except Exception as exc:
             logger.warning("Failed to open Pi Camera via picamera2: %s", exc)
@@ -162,10 +187,8 @@ class Picamera2Backend(CameraBackend):
         if self._camera is None:
             return None
         try:
-            frame = self._camera.capture_array()
-            if frame is None:
-                return None
-            return np.ascontiguousarray(frame)
+            frame = self._camera.capture_array(self._stream_name)
+            return self._to_rgb_u8(frame)
         except Exception as exc:
             logger.warning("Pi Camera read failed: %s", exc)
             return None
