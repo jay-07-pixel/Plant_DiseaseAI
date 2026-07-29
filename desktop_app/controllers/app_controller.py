@@ -141,6 +141,7 @@ class AppController:
         prepared = prepare_image_for_pi_inference(
             image_path,
             output_dir=self.config.project_root / "logs" / "captures",
+            max_side=768,
         )
         self._current_image_path = prepared
         if os.getenv("PLANT_DISEASE_INFERENCE_DEBUG", "").lower() in ("1", "true", "yes"):

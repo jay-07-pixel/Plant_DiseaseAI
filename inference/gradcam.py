@@ -241,20 +241,39 @@ def generate_gradcam(
     device: torch.device,
     target_layer_fn: Callable[[nn.Module], nn.Module] | None = None,
     alpha: float = 0.45,
+    display_max_side: int | None = None,
 ) -> GradCAMOutputs:
     """
     End-to-end Grad-CAM generation and save.
 
     Attempts ``pytorch-grad-cam`` first, falls back to native implementation.
+    ``display_max_side`` downscales the saved overlay on low-RAM devices (Pi).
     """
+    import gc
+
     layer_fn = target_layer_fn or get_efficientnet_b0_target_layer
     target_layer = layer_fn(model)
 
-    cam = try_pytorch_grad_cam(model, target_layer, input_tensor, target_class, original_rgb)
+    display_rgb = original_rgb
+    if display_max_side is not None:
+        h, w = original_rgb.shape[:2]
+        longest = max(h, w)
+        if longest > display_max_side:
+            scale = display_max_side / float(longest)
+            display_rgb = cv2.resize(
+                original_rgb,
+                (max(1, int(w * scale)), max(1, int(h * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+
+    cam = try_pytorch_grad_cam(model, target_layer, input_tensor, target_class, display_rgb)
 
     if cam is None:
         model.eval()
         with GradCAM(model=model, target_layer=target_layer, device=device) as grad_cam:
             cam = grad_cam.generate(input_tensor, target_class)
 
-    return save_gradcam_outputs(original_rgb, cam, output_dir, alpha=alpha)
+    model.zero_grad(set_to_none=True)
+    outputs = save_gradcam_outputs(display_rgb, cam, output_dir, alpha=alpha)
+    gc.collect()
+    return outputs

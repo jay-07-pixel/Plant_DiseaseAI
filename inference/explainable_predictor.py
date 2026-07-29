@@ -131,6 +131,12 @@ class ExplainablePredictor(Predictor):
         tensor = self._preprocess(path)
         out_dir = self._resolve_output_dir(path, Path(output_dir) if output_dir else None)
 
+        display_max_side = self.config.get("inference.pi_gradcam_max_side")
+        try:
+            display_max_side = int(display_max_side) if display_max_side is not None else None
+        except (TypeError, ValueError):
+            display_max_side = None
+
         gradcam_start = time.perf_counter()
         gradcam_outputs: GradCAMOutputs = generate_gradcam(
             model=self._model,
@@ -140,8 +146,14 @@ class ExplainablePredictor(Predictor):
             output_dir=out_dir,
             device=self.device,
             alpha=self.overlay_alpha,
+            display_max_side=display_max_side,
         )
         gradcam_ms = (time.perf_counter() - gradcam_start) * 1000
+
+        # Drop large arrays from memory after saving paths for the UI.
+        del original_rgb, tensor
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         return ExplainablePredictionResult(
             predicted_class=base_result.predicted_class,
@@ -154,7 +166,7 @@ class ExplainablePredictor(Predictor):
             overlay_path=str(gradcam_outputs.overlay_path),
             original_output_path=str(gradcam_outputs.original_path),
             gradcam_output_dir=str(out_dir),
-            heatmap=gradcam_outputs.heatmap,
+            heatmap=None,
         )
 
     def predict(self, image_path: Path | str) -> PredictionResult:

@@ -15,5 +15,6 @@ desktop_app:
     warmup_frames: 4
 
 inference:
-  # Grad-CAM is CPU-heavy on Pi; set PLANT_DISEASE_ENABLE_GRADCAM=1 to force it on.
-  enable_gradcam: false
+  # Grad-CAM enabled on Pi with memory-safe overlay sizing in code.
+  enable_gradcam: true
+  pi_gradcam_max_side: 512
