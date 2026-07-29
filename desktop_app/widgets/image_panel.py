@@ -16,6 +16,7 @@ class ImageDisplay(QFrame):
     """Single image panel with label."""
 
     IMAGE_HEIGHT = 300
+    IMAGE_HEIGHT_SMALL = 160
 
     def __init__(
         self,
@@ -37,9 +38,13 @@ class ImageDisplay(QFrame):
         self.title_label = QLabel()
         self.title_label.setStyleSheet("font-weight: 600; font-size: 12px; color: #5F6B7A;")
 
+        from utils.platform import is_raspberry_pi
+
+        min_h = self.IMAGE_HEIGHT_SMALL if is_raspberry_pi() else self.IMAGE_HEIGHT
+
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_label.setMinimumHeight(self.IMAGE_HEIGHT)
+        self.image_label.setMinimumHeight(min_h)
         self.image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.image_label.setStyleSheet(IMAGE_PLACEHOLDER_STYLE)
 

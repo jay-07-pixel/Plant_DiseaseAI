@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QVBoxLayout, QWidget
 
 from desktop_app.controllers.app_controller import AppController
@@ -17,10 +18,11 @@ from desktop_app.widgets.image_panel import ImagePairPanel
 from desktop_app.widgets.prediction_card import PredictionCard
 from inference.explainable_predictor import ExplainablePredictionResult
 from utils.config import AppConfig
+from utils.platform import is_raspberry_pi
 
 
 class MainWindow(QMainWindow):
-    """Fixed-size PlantDiseaseAI desktop application."""
+    """PlantDiseaseAI desktop application (auto-sizes for small Pi displays)."""
 
     WIDTH = 1400
     HEIGHT = 780
@@ -35,13 +37,15 @@ class MainWindow(QMainWindow):
         self._inference_service: InferenceService | None = None
         self._last_result: ExplainablePredictionResult | None = None
 
-        self.setFixedSize(self.WIDTH, self.HEIGHT)
+        self._apply_window_size()
 
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(20, 12, 20, 12)
-        root.setSpacing(8)
+        # Tighter margins on small screens.
+        margin = 8 if is_raspberry_pi() else 20
+        root.setContentsMargins(margin, 8, margin, 8)
+        root.setSpacing(6 if is_raspberry_pi() else 8)
 
         self.header = HeaderWidget(self.translator)
         root.addWidget(self.header)
@@ -72,6 +76,28 @@ class MainWindow(QMainWindow):
         self.retranslate_ui()
         self.controller.start_model_loading()
 
+    def _apply_window_size(self) -> None:
+        """Fit window to the active screen — critical for 7\" HDMI/DSI panels."""
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            self.resize(self.WIDTH, self.HEIGHT)
+            return
+
+        available = screen.availableGeometry()
+        # Leave a small margin so window managers / panels don't clip us.
+        max_w = max(640, available.width() - 16)
+        max_h = max(480, available.height() - 16)
+
+        if is_raspberry_pi() or max_w < self.WIDTH or max_h < self.HEIGHT:
+            width = min(self.WIDTH, max_w)
+            height = min(self.HEIGHT, max_h)
+            self.setMinimumSize(min(640, width), min(480, height))
+            self.resize(width, height)
+            # Prefer maximized on very small panels so UI stays usable.
+            if max_w <= 1024 or max_h <= 600:
+                self.showMaximized()
+        else:
+            self.setFixedSize(self.WIDTH, self.HEIGHT)
     def _set_initial_crop(self, crop_name: str) -> None:
         combo = self.left_panel.crop_combo
         combo.blockSignals(True)
