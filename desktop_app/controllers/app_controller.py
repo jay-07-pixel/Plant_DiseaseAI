@@ -128,7 +128,15 @@ class AppController:
     def on_capture(self) -> None:
         if self._busy:
             return
-        # Free RAM before opening the camera again (important after 1st capture).
+
+        # Pi: use system still capture (separate process) so Torch + live
+        # camera preview never run together — that combination hard-crashes many Pis.
+        from utils.platform import is_raspberry_pi
+
+        if is_raspberry_pi():
+            self._capture_still_pi()
+            return
+
         self._cleanup_memory()
         dialog = CameraCaptureDialog(self.config, self.window.translator, self.window)
         accepted = dialog.exec()
@@ -137,6 +145,84 @@ class AppController:
         self._cleanup_memory()
         if accepted and captured:
             self.run_inference(captured)
+
+    def _capture_still_pi(self) -> None:
+        """Capture one JPEG via libcamera-still, then run inference."""
+        import subprocess
+        from datetime import datetime, timezone
+
+        capture_dir = self.config.project_root / "logs" / "captures"
+        capture_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        path = capture_dir / f"capture_{timestamp}.jpg"
+
+        self._set_busy(True)
+        self._cleanup_memory()
+        QMessageBox.information(
+            self.window,
+            self._t("camera.title"),
+            "Capturing photo… hold the leaf steady for 1 second.",
+        )
+
+        cmd = [
+            "libcamera-still",
+            "-n",
+            "-t",
+            "1000",
+            "--width",
+            "640",
+            "--height",
+            "480",
+            "-o",
+            str(path),
+        ]
+        try:
+            completed = subprocess.run(
+                cmd,
+                check=False,
+                timeout=20,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            self._set_busy(False)
+            QMessageBox.critical(
+                self.window,
+                self._t("camera.title"),
+                "libcamera-still not found. Install with:\nsudo apt install -y libcamera-apps",
+            )
+            return
+        except subprocess.TimeoutExpired:
+            self._set_busy(False)
+            QMessageBox.critical(
+                self.window,
+                self._t("camera.title"),
+                "Camera timed out. Check the ribbon cable and try again.",
+            )
+            return
+        except Exception as exc:
+            self._set_busy(False)
+            QMessageBox.critical(
+                self.window,
+                self._t("camera.title"),
+                f"Camera capture failed: {exc}",
+            )
+            return
+
+        self._cleanup_memory()
+        if completed.returncode != 0 or not path.exists():
+            self._set_busy(False)
+            err = (completed.stderr or completed.stdout or "unknown error").strip()
+            QMessageBox.critical(
+                self.window,
+                self._t("camera.title"),
+                f"Camera capture failed.\n{err[:400]}",
+            )
+            return
+
+        # run_inference will set busy again
+        self._set_busy(False)
+        self.run_inference(path)
 
     def run_inference(self, image_path: Path) -> None:
         selected_crop = self.window.left_panel.selected_crop()
