@@ -64,7 +64,10 @@ class ExplanationPanel(QFrame):
 
         self.setObjectName("card")
         self.setStyleSheet(f"QFrame#card {{ {CARD_STYLE} }}")
-        self.setFixedHeight(self.PANEL_HEIGHT)
+        from utils.platform import is_raspberry_pi
+
+        height = 120 if is_raspberry_pi() else self.PANEL_HEIGHT
+        self.setFixedHeight(height)
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
