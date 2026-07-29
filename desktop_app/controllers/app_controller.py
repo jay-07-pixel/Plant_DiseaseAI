@@ -14,6 +14,7 @@ from desktop_app.services.model_manager import ModelManager
 from desktop_app.services.workers import GroqWorker, InferenceWorker, ModelLoadWorker
 from desktop_app.widgets.camera_dialog import CameraCaptureDialog
 from inference.explainable_predictor import ExplainablePredictionResult
+from utils.platform import prepare_image_for_pi_inference
 from utils.config import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -137,7 +138,11 @@ class AppController:
 
         self._inference_generation += 1
         inference_generation = self._inference_generation
-        self._current_image_path = image_path
+        prepared = prepare_image_for_pi_inference(
+            image_path,
+            output_dir=self.config.project_root / "logs" / "captures",
+        )
+        self._current_image_path = prepared
         if os.getenv("PLANT_DISEASE_INFERENCE_DEBUG", "").lower() in ("1", "true", "yes"):
             logger.info(
                 "[INFERENCE_DEBUG] selected_crop=%s display=%s service_crop=%s weights=%s",
@@ -146,10 +151,10 @@ class AppController:
                 self.service.crop_name,
                 self.service.weights_path,
             )
-        self.window.set_inference_running(image_path)
+        self.window.set_inference_running(prepared)
         self._inference_worker = InferenceWorker(
             self.service,
-            image_path,
+            prepared,
             inference_generation,
             self.window,
         )

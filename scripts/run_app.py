@@ -11,9 +11,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from utils.platform import append_pi_system_packages
+from utils.platform import append_pi_system_packages, configure_pi_low_memory
 
 append_pi_system_packages()
+configure_pi_low_memory()
 
 from desktop_app.app import run_app
 
