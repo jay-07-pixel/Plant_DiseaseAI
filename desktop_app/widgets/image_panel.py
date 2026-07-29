@@ -55,8 +55,24 @@ class ImageDisplay(QFrame):
 
     def retranslate_ui(self) -> None:
         self.title_label.setText(self.translator.t(self.title_key))
-        if self._current_path is None:
+        pix = self.image_label.pixmap()
+        if self._current_path is None and (pix is None or pix.isNull()) and not self.image_label.text():
             self.image_label.setText(self.translator.t("image_panel.no_image"))
+        elif self._current_path is None and (pix is None or pix.isNull()):
+            # Keep live-preview hint if showing text only
+            if self.image_label.text() in {
+                "",
+                self.translator.t("image_panel.no_image"),
+            }:
+                pass
+
+    def set_live_frame(self, pixmap: QPixmap) -> None:
+        """Show a live camera frame (no file path)."""
+        self._current_path = None
+        if pixmap.isNull():
+            self.image_label.setText(self.translator.t("image_panel.live_preview"))
+            return
+        self._apply_scaled_pixmap(pixmap)
 
     def set_image(self, path: Path | str | None) -> None:
         self._current_path = path

@@ -69,7 +69,22 @@ class ControlsBar(QFrame):
         for index, code in enumerate(SUPPORTED_LANGUAGES):
             self.language_combo.setItemText(index, self.translator.language_option(code))
         self.upload_btn.setText(self.translator.t("buttons.upload_image"))
-        self.capture_btn.setText(self.translator.t("buttons.capture_image"))
+        # Default label; controller may override while preview is active.
+        if not hasattr(self, "_camera_preview_active") or not self._camera_preview_active:
+            self.capture_btn.setText(self.translator.t("buttons.start_camera"))
+
+    def set_camera_preview_active(self, active: bool) -> None:
+        self._camera_preview_active = active
+        if active:
+            self.capture_btn.setText(self.translator.t("buttons.capture"))
+            self.capture_btn.setObjectName("")
+            self.capture_btn.style().unpolish(self.capture_btn)
+            self.capture_btn.style().polish(self.capture_btn)
+        else:
+            self.capture_btn.setText(self.translator.t("buttons.start_camera"))
+            self.capture_btn.setObjectName("secondaryBtn")
+            self.capture_btn.style().unpolish(self.capture_btn)
+            self.capture_btn.style().polish(self.capture_btn)
 
     def selected_crop(self) -> str:
         return str(self.crop_combo.currentData())

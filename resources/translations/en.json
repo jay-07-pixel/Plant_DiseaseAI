@@ -22,9 +22,10 @@
     "crop_tomato": "Tomato",
     "model_efficientnet": "EfficientNet-B0"
   },
-  "buttons": {
+    "buttons": {
     "upload_image": "Upload Image",
-    "capture_image": "Capture Image",
+    "capture_image": "Start Camera",
+    "start_camera": "Start Camera",
     "capture": "Capture",
     "cancel": "Cancel"
   },
@@ -32,7 +33,8 @@
     "original": "Original Image",
     "gradcam": "Grad-CAM Overlay",
     "no_image": "No image",
-    "failed_to_load": "Failed to load"
+    "failed_to_load": "Failed to load",
+    "live_preview": "Live camera preview"
   },
   "prediction": {
     "title": "Predictions",

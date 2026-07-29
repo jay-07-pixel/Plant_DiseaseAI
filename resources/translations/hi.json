@@ -24,7 +24,8 @@
   },
   "buttons": {
     "upload_image": "छवि अपलोड करें",
-    "capture_image": "छवि कैप्चर करें",
+    "capture_image": "कैमरा शुरू करें",
+    "start_camera": "कैमरा शुरू करें",
     "capture": "कैप्चर",
     "cancel": "रद्द करें"
   },
@@ -32,7 +33,8 @@
     "original": "मूल छवि",
     "gradcam": "Grad-CAM ओवरले",
     "no_image": "कोई छवि नहीं",
-    "failed_to_load": "लोड करने में विफल"
+    "failed_to_load": "लोड करने में विफल",
+    "live_preview": "लाइव कैमरा पूर्वावलोकन"
   },
   "prediction": {
     "title": "भविष्यवाणियाँ",

@@ -5,18 +5,23 @@ from __future__ import annotations
 import gc
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
+import cv2
+import numpy as np
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QWidget
 
+from desktop_app.services.camera_service import CameraBackend, create_camera_backend
 from desktop_app.services.groq_service import GroqExplanation, GroqExplanationService
 from desktop_app.services.inference_service import InferenceService
 from desktop_app.services.model_manager import ModelManager
 from desktop_app.services.workers import GroqWorker, InferenceWorker, ModelLoadWorker
-from desktop_app.widgets.camera_dialog import CameraCaptureDialog
 from inference.explainable_predictor import ExplainablePredictionResult
 from utils.config import AppConfig
-from utils.platform import prepare_image_for_pi_inference
+from utils.platform import is_raspberry_pi, prepare_image_for_pi_inference
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +48,13 @@ class AppController:
         self._inference_generation = 0
         self._busy = False
 
+        self._camera: CameraBackend | None = None
+        self._camera_preview_active = False
+        self._last_preview_frame: np.ndarray | None = None
+        self._preview_timer = QTimer(window)
+        self._preview_timer.timeout.connect(self._update_live_preview)
+        self._preview_interval_ms = 200 if is_raspberry_pi() else 40
+
         self._bind_window()
 
     def _bind_window(self) -> None:
@@ -56,8 +68,12 @@ class AppController:
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
-        self.window.upload_btn.setEnabled(not busy)
-        self.window.capture_btn.setEnabled(not busy)
+        if self._camera_preview_active:
+            self.window.upload_btn.setEnabled(False)
+            self.window.capture_btn.setEnabled(True)
+        else:
+            self.window.upload_btn.setEnabled(not busy)
+            self.window.capture_btn.setEnabled(not busy)
 
     def _cleanup_memory(self) -> None:
         gc.collect()
@@ -73,6 +89,7 @@ class AppController:
         self._load_crop_model(self._current_crop)
 
     def on_crop_changed(self, _index: int = 0) -> None:
+        self._stop_camera_preview()
         crop = self.window.left_panel.selected_crop()
         if crop == self._current_crop and self.service is not None:
             return
@@ -116,6 +133,7 @@ class AppController:
     def on_upload(self) -> None:
         if self._busy:
             return
+        self._stop_camera_preview()
         path, _ = QFileDialog.getOpenFileName(
             self.window,
             self._t("file_dialog.select_leaf"),
@@ -126,119 +144,114 @@ class AppController:
             self.run_inference(Path(path))
 
     def on_capture(self) -> None:
-        if self._busy:
+        """Toggle: Start Camera → live preview; Capture → save frame + inference."""
+        if self._busy and not self._camera_preview_active:
             return
 
-        from utils.platform import is_raspberry_pi
+        if not self._camera_preview_active:
+            self._start_camera_preview()
+        else:
+            self._capture_from_preview()
 
-        if is_raspberry_pi():
-            # Prefer CLI still capture (isolates camera from Torch). If tools are
-            # missing, fall back to the in-app camera dialog.
-            if self._capture_still_pi():
-                return
-
+    def _start_camera_preview(self) -> None:
         self._cleanup_memory()
-        dialog = CameraCaptureDialog(self.config, self.window.translator, self.window)
-        accepted = dialog.exec()
-        captured = dialog.captured_path
-        dialog.deleteLater()
+        self.window.image_panel.overlay_display.set_image(None)
+        self.window.image_panel.original_display.set_image(None)
+        self.window.image_panel.original_display.image_label.setText(
+            self._t("camera.initializing")
+        )
+
+        try:
+            camera = create_camera_backend(self.config)
+        except Exception as exc:
+            QMessageBox.critical(
+                self.window,
+                self._t("camera.title"),
+                f"Failed to open camera: {exc}",
+            )
+            return
+
+        if camera is None or not camera.is_open:
+            QMessageBox.warning(
+                self.window,
+                self._t("camera.title"),
+                self._t("camera.not_available"),
+            )
+            return
+
+        self._camera = camera
+        self._camera_preview_active = True
+        self.window.left_panel.set_camera_preview_active(True)
+        self.window.upload_btn.setEnabled(False)
+        self._preview_timer.start(self._preview_interval_ms)
+        logger.info("Live camera preview started | backend=%s", camera.name)
+
+    def _update_live_preview(self) -> None:
+        if self._camera is None or not self._camera_preview_active:
+            return
+        try:
+            frame = self._camera.read_rgb()
+        except Exception:
+            return
+        if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
+            return
+
+        self._last_preview_frame = frame
+        h, w, ch = frame.shape
+        image = QImage(frame.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
+        pixmap = QPixmap.fromImage(image)
+        self.window.image_panel.original_display.set_live_frame(pixmap)
+
+    def _stop_camera_preview(self) -> None:
+        self._preview_timer.stop()
+        if self._camera is not None:
+            try:
+                self._camera.close()
+            except Exception:
+                pass
+            self._camera = None
+        self._camera_preview_active = False
+        self._last_preview_frame = None
+        self.window.left_panel.set_camera_preview_active(False)
+        if not self._busy:
+            self.window.upload_btn.setEnabled(True)
+            self.window.capture_btn.setEnabled(True)
         self._cleanup_memory()
-        if accepted and captured:
-            self.run_inference(captured)
 
-    def _find_pi_still_command(self) -> list[str] | None:
-        """Return argv prefix for Pi still capture (Bookworm uses rpicam-*)."""
-        import shutil
+    def _capture_from_preview(self) -> None:
+        frame = self._last_preview_frame
+        if frame is None and self._camera is not None:
+            try:
+                frame = self._camera.read_rgb()
+            except Exception:
+                frame = None
 
-        for name in ("rpicam-still", "libcamera-still", "rpicam-jpeg", "libcamera-jpeg"):
-            resolved = shutil.which(name)
-            if resolved:
-                return [resolved]
-        return None
+        self._stop_camera_preview()
 
-    def _capture_still_pi(self) -> bool:
-        """
-        Capture one JPEG via rpicam-still / libcamera-still, then run inference.
-
-        Returns True if handled (success or user-facing failure already shown).
-        Returns False if CLI tools are unavailable so caller can fall back.
-        """
-        import subprocess
-        from datetime import datetime, timezone
-
-        still_cmd = self._find_pi_still_command()
-        if still_cmd is None:
-            logger.warning("No rpicam/libcamera still tool found; falling back to camera dialog")
-            return False
+        if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
+            QMessageBox.warning(
+                self.window,
+                self._t("camera.title"),
+                self._t("camera.not_available"),
+            )
+            return
 
         capture_dir = self.config.project_root / "logs" / "captures"
         capture_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         path = capture_dir / f"capture_{timestamp}.jpg"
-
-        self._set_busy(True)
-        self._cleanup_memory()
-        QMessageBox.information(
-            self.window,
-            self._t("camera.title"),
-            "Capturing photo… hold the leaf steady for 1 second.",
-        )
-
-        cmd = [
-            *still_cmd,
-            "-n",
-            "-t",
-            "1000",
-            "--width",
-            "640",
-            "--height",
-            "480",
-            "-o",
-            str(path),
-        ]
-        # rpicam-jpeg uses a smaller flag set
-        if Path(still_cmd[0]).name.endswith("jpeg"):
-            cmd = [*still_cmd, "-n", "-t", "1000", "-o", str(path)]
-
-        try:
-            completed = subprocess.run(
-                cmd,
-                check=False,
-                timeout=20,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.TimeoutExpired:
-            self._set_busy(False)
+        ok = cv2.imwrite(str(path), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        if not ok:
             QMessageBox.critical(
                 self.window,
                 self._t("camera.title"),
-                "Camera timed out. Check the ribbon cable and try again.",
+                "Failed to save captured image.",
             )
-            return True
-        except Exception as exc:
-            self._set_busy(False)
-            QMessageBox.critical(
-                self.window,
-                self._t("camera.title"),
-                f"Camera capture failed: {exc}",
-            )
-            return True
+            return
 
-        self._cleanup_memory()
-        if completed.returncode != 0 or not path.exists():
-            self._set_busy(False)
-            err = (completed.stderr or completed.stdout or "unknown error").strip()
-            QMessageBox.critical(
-                self.window,
-                self._t("camera.title"),
-                f"Camera capture failed.\n{err[:400]}",
-            )
-            return True
-
-        self._set_busy(False)
+        # Show captured still in Original Image panel, then run AI.
+        self.window.image_panel.original_display.set_image(path)
         self.run_inference(path)
-        return True
 
     def run_inference(self, image_path: Path) -> None:
         selected_crop = self.window.left_panel.selected_crop()
@@ -323,7 +336,6 @@ class AppController:
         if self._current_image_path is None:
             return
 
-        # Avoid overlapping Groq workers on repeated captures.
         if self._groq_worker is not None and self._groq_worker.isRunning():
             self._groq_worker.wait(1000)
 
