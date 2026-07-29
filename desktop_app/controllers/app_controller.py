@@ -129,13 +129,13 @@ class AppController:
         if self._busy:
             return
 
-        # Pi: use system still capture (separate process) so Torch + live
-        # camera preview never run together — that combination hard-crashes many Pis.
         from utils.platform import is_raspberry_pi
 
         if is_raspberry_pi():
-            self._capture_still_pi()
-            return
+            # Prefer CLI still capture (isolates camera from Torch). If tools are
+            # missing, fall back to the in-app camera dialog.
+            if self._capture_still_pi():
+                return
 
         self._cleanup_memory()
         dialog = CameraCaptureDialog(self.config, self.window.translator, self.window)
@@ -146,10 +146,30 @@ class AppController:
         if accepted and captured:
             self.run_inference(captured)
 
-    def _capture_still_pi(self) -> None:
-        """Capture one JPEG via libcamera-still, then run inference."""
+    def _find_pi_still_command(self) -> list[str] | None:
+        """Return argv prefix for Pi still capture (Bookworm uses rpicam-*)."""
+        import shutil
+
+        for name in ("rpicam-still", "libcamera-still", "rpicam-jpeg", "libcamera-jpeg"):
+            resolved = shutil.which(name)
+            if resolved:
+                return [resolved]
+        return None
+
+    def _capture_still_pi(self) -> bool:
+        """
+        Capture one JPEG via rpicam-still / libcamera-still, then run inference.
+
+        Returns True if handled (success or user-facing failure already shown).
+        Returns False if CLI tools are unavailable so caller can fall back.
+        """
         import subprocess
         from datetime import datetime, timezone
+
+        still_cmd = self._find_pi_still_command()
+        if still_cmd is None:
+            logger.warning("No rpicam/libcamera still tool found; falling back to camera dialog")
+            return False
 
         capture_dir = self.config.project_root / "logs" / "captures"
         capture_dir.mkdir(parents=True, exist_ok=True)
@@ -165,7 +185,7 @@ class AppController:
         )
 
         cmd = [
-            "libcamera-still",
+            *still_cmd,
             "-n",
             "-t",
             "1000",
@@ -176,6 +196,10 @@ class AppController:
             "-o",
             str(path),
         ]
+        # rpicam-jpeg uses a smaller flag set
+        if Path(still_cmd[0]).name.endswith("jpeg"):
+            cmd = [*still_cmd, "-n", "-t", "1000", "-o", str(path)]
+
         try:
             completed = subprocess.run(
                 cmd,
@@ -184,14 +208,6 @@ class AppController:
                 capture_output=True,
                 text=True,
             )
-        except FileNotFoundError:
-            self._set_busy(False)
-            QMessageBox.critical(
-                self.window,
-                self._t("camera.title"),
-                "libcamera-still not found. Install with:\nsudo apt install -y libcamera-apps",
-            )
-            return
         except subprocess.TimeoutExpired:
             self._set_busy(False)
             QMessageBox.critical(
@@ -199,7 +215,7 @@ class AppController:
                 self._t("camera.title"),
                 "Camera timed out. Check the ribbon cable and try again.",
             )
-            return
+            return True
         except Exception as exc:
             self._set_busy(False)
             QMessageBox.critical(
@@ -207,7 +223,7 @@ class AppController:
                 self._t("camera.title"),
                 f"Camera capture failed: {exc}",
             )
-            return
+            return True
 
         self._cleanup_memory()
         if completed.returncode != 0 or not path.exists():
@@ -218,11 +234,11 @@ class AppController:
                 self._t("camera.title"),
                 f"Camera capture failed.\n{err[:400]}",
             )
-            return
+            return True
 
-        # run_inference will set busy again
         self._set_busy(False)
         self.run_inference(path)
+        return True
 
     def run_inference(self, image_path: Path) -> None:
         selected_crop = self.window.left_panel.selected_crop()
