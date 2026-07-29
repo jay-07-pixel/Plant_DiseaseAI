@@ -242,11 +242,13 @@ def generate_gradcam(
     target_layer_fn: Callable[[nn.Module], nn.Module] | None = None,
     alpha: float = 0.45,
     display_max_side: int | None = None,
+    *,
+    use_external_lib: bool = True,
 ) -> GradCAMOutputs:
     """
     End-to-end Grad-CAM generation and save.
 
-    Attempts ``pytorch-grad-cam`` first, falls back to native implementation.
+    Attempts ``pytorch-grad-cam`` first (unless disabled), falls back to native.
     ``display_max_side`` downscales the saved overlay on low-RAM devices (Pi).
     """
     import gc
@@ -266,7 +268,9 @@ def generate_gradcam(
                 interpolation=cv2.INTER_AREA,
             )
 
-    cam = try_pytorch_grad_cam(model, target_layer, input_tensor, target_class, display_rgb)
+    cam = None
+    if use_external_lib:
+        cam = try_pytorch_grad_cam(model, target_layer, input_tensor, target_class, display_rgb)
 
     if cam is None:
         model.eval()
@@ -275,5 +279,6 @@ def generate_gradcam(
 
     model.zero_grad(set_to_none=True)
     outputs = save_gradcam_outputs(display_rgb, cam, output_dir, alpha=alpha)
+    del cam, display_rgb
     gc.collect()
     return outputs

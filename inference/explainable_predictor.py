@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import time
@@ -13,7 +14,9 @@ import torch
 
 from inference.gradcam import GradCAMOutputs, generate_gradcam
 from inference.predictor import Predictor, PredictionResult, TopPrediction
+from training.transforms import IMAGENET_MEAN, IMAGENET_STD
 from utils.image_utils import read_image_rgb
+from utils.platform import is_raspberry_pi
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +81,53 @@ class ExplainablePredictor(Predictor):
             return output_dir
         return self.gradcam_output_root / image_path.stem
 
+    def _prediction_only_result(
+        self,
+        path: Path,
+        base_result: PredictionResult,
+        out_dir: Path,
+        *,
+        original_path: Path | None = None,
+    ) -> ExplainablePredictionResult:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        saved_original = original_path or path
+        if original_path is None:
+            try:
+                import cv2
+
+                rgb = read_image_rgb(path)
+                saved_original = out_dir / "original.jpg"
+                cv2.imwrite(str(saved_original), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+                del rgb
+            except Exception:
+                saved_original = path
+
+        return ExplainablePredictionResult(
+            predicted_class=base_result.predicted_class,
+            predicted_class_id=base_result.predicted_class_id,
+            confidence=base_result.confidence,
+            top_predictions=list(base_result.top_predictions),
+            inference_time_ms=base_result.inference_time_ms,
+            image_path=str(path),
+            heatmap_path=None,
+            overlay_path=None,
+            original_output_path=str(saved_original),
+            gradcam_output_dir=str(out_dir),
+            heatmap=None,
+        )
+
+    @staticmethod
+    def _tensor_to_display_rgb(tensor: torch.Tensor) -> np.ndarray:
+        """Rebuild a small RGB preview from the model input tensor (Pi-safe)."""
+        arr = tensor.detach().float().cpu()
+        if arr.dim() == 4:
+            arr = arr[0]
+        mean = torch.tensor(IMAGENET_MEAN).view(3, 1, 1)
+        std = torch.tensor(IMAGENET_STD).view(3, 1, 1)
+        arr = arr * std + mean
+        arr = arr.clamp(0, 1).permute(1, 2, 0).numpy()
+        return (arr * 255.0).astype(np.uint8)
+
     def predict_with_gradcam(
         self,
         image_path: Path | str,
@@ -86,88 +136,75 @@ class ExplainablePredictor(Predictor):
         """
         Run prediction and generate Grad-CAM for the Top-1 predicted class.
 
-        Saves ``original.jpg``, ``heatmap.png``, and ``overlay.png`` under
-        ``outputs/gradcam/<image_stem>/`` by default.
+        On Raspberry Pi, Grad-CAM uses a low-RAM path (model-size overlay only)
+        and falls back to prediction-only if Grad-CAM fails.
         """
         path = Path(image_path)
         if not path.exists():
             raise FileNotFoundError(f"Image not found: {path}")
 
-        # Step 1: Standard prediction (no gradients, unchanged logic)
         base_result = self.predict(path)
+        out_dir = self._resolve_output_dir(path, Path(output_dir) if output_dir else None)
 
         if not self._gradcam_enabled():
             logger.info("Grad-CAM disabled; returning prediction only")
-            original_rgb = read_image_rgb(path)
-            out_dir = self._resolve_output_dir(path, Path(output_dir) if output_dir else None)
-            out_dir.mkdir(parents=True, exist_ok=True)
-            original_path = out_dir / "original.jpg"
-            try:
-                import cv2
+            return self._prediction_only_result(path, base_result, out_dir)
 
-                cv2.imwrite(str(original_path), cv2.cvtColor(original_rgb, cv2.COLOR_RGB2BGR))
-            except Exception:
-                original_path = path
+        if self._model is None or not isinstance(self._model, torch.nn.Module):
+            raise RuntimeError("Grad-CAM requires the PyTorch backend and a loaded nn.Module.")
+
+        on_pi = is_raspberry_pi()
+        try:
+            tensor = self._preprocess(path)
+            if on_pi:
+                # Avoid decoding a second full-resolution copy for overlay.
+                display_rgb = self._tensor_to_display_rgb(tensor)
+                display_max_side = 224
+                use_external_lib = False
+            else:
+                display_rgb = read_image_rgb(path)
+                raw_max = self.config.get("inference.pi_gradcam_max_side")
+                try:
+                    display_max_side = int(raw_max) if raw_max is not None else None
+                except (TypeError, ValueError):
+                    display_max_side = None
+                use_external_lib = True
+
+            gc.collect()
+            gradcam_start = time.perf_counter()
+            gradcam_outputs: GradCAMOutputs = generate_gradcam(
+                model=self._model,
+                input_tensor=tensor,
+                target_class=base_result.predicted_class_id,
+                original_rgb=display_rgb,
+                output_dir=out_dir,
+                device=self.device,
+                alpha=self.overlay_alpha,
+                display_max_side=display_max_side,
+                use_external_lib=use_external_lib,
+            )
+            gradcam_ms = (time.perf_counter() - gradcam_start) * 1000
+
+            del display_rgb, tensor
+            gc.collect()
 
             return ExplainablePredictionResult(
                 predicted_class=base_result.predicted_class,
                 predicted_class_id=base_result.predicted_class_id,
                 confidence=base_result.confidence,
                 top_predictions=list(base_result.top_predictions),
-                inference_time_ms=base_result.inference_time_ms,
+                inference_time_ms=base_result.inference_time_ms + gradcam_ms,
                 image_path=str(path),
-                heatmap_path=None,
-                overlay_path=None,
-                original_output_path=str(original_path),
+                heatmap_path=str(gradcam_outputs.heatmap_path),
+                overlay_path=str(gradcam_outputs.overlay_path),
+                original_output_path=str(gradcam_outputs.original_path),
                 gradcam_output_dir=str(out_dir),
                 heatmap=None,
             )
-
-        if self._model is None or not isinstance(self._model, torch.nn.Module):
-            raise RuntimeError("Grad-CAM requires the PyTorch backend and a loaded nn.Module.")
-
-        # Step 2: Grad-CAM for Top-1 class
-        original_rgb = read_image_rgb(path)
-        tensor = self._preprocess(path)
-        out_dir = self._resolve_output_dir(path, Path(output_dir) if output_dir else None)
-
-        display_max_side = self.config.get("inference.pi_gradcam_max_side")
-        try:
-            display_max_side = int(display_max_side) if display_max_side is not None else None
-        except (TypeError, ValueError):
-            display_max_side = None
-
-        gradcam_start = time.perf_counter()
-        gradcam_outputs: GradCAMOutputs = generate_gradcam(
-            model=self._model,
-            input_tensor=tensor,
-            target_class=base_result.predicted_class_id,
-            original_rgb=original_rgb,
-            output_dir=out_dir,
-            device=self.device,
-            alpha=self.overlay_alpha,
-            display_max_side=display_max_side,
-        )
-        gradcam_ms = (time.perf_counter() - gradcam_start) * 1000
-
-        # Drop large arrays from memory after saving paths for the UI.
-        del original_rgb, tensor
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        return ExplainablePredictionResult(
-            predicted_class=base_result.predicted_class,
-            predicted_class_id=base_result.predicted_class_id,
-            confidence=base_result.confidence,
-            top_predictions=list(base_result.top_predictions),
-            inference_time_ms=base_result.inference_time_ms + gradcam_ms,
-            image_path=str(path),
-            heatmap_path=str(gradcam_outputs.heatmap_path),
-            overlay_path=str(gradcam_outputs.overlay_path),
-            original_output_path=str(gradcam_outputs.original_path),
-            gradcam_output_dir=str(out_dir),
-            heatmap=None,
-        )
+        except Exception as exc:
+            logger.exception("Grad-CAM failed; returning prediction only | error=%s", exc)
+            gc.collect()
+            return self._prediction_only_result(path, base_result, out_dir)
 
     def predict(self, image_path: Path | str) -> PredictionResult:
         """Standard prediction without Grad-CAM (backward compatible)."""
