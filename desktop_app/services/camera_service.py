@@ -204,6 +204,14 @@ class Picamera2Backend(CameraBackend):
             except Exception:
                 pass
             self._camera = None
+            # Give libcamera time to release the sensor before the next open.
+            if is_raspberry_pi():
+                import time
+
+                time.sleep(0.4)
+                import gc
+
+                gc.collect()
 
 
 def _camera_settings(config: AppConfig) -> dict:

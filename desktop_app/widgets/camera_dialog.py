@@ -79,13 +79,17 @@ class CameraCaptureDialog(QDialog):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self.preview.setText(self.translator.t("camera.initializing"))
-        # Defer camera open so the dialog paints first (avoids UI freeze on Pi).
-        QTimer.singleShot(50, self._open_camera)
+        # Longer defer on Pi so previous camera session can fully release.
+        delay_ms = 400 if self._on_pi else 50
+        QTimer.singleShot(delay_ms, self._open_camera)
 
     def _open_camera(self) -> None:
         if self._camera is not None:
             return
-        self._camera = create_camera_backend(self.config)
+        try:
+            self._camera = create_camera_backend(self.config)
+        except Exception:
+            self._camera = None
         if self._camera is None or not self._camera.is_open:
             self.preview.setText(self.translator.t("camera.not_available"))
             self.capture_btn.setEnabled(False)
@@ -95,8 +99,16 @@ class CameraCaptureDialog(QDialog):
     def _release_camera(self) -> None:
         self._timer.stop()
         if self._camera is not None:
-            self._camera.close()
+            try:
+                self._camera.close()
+            except Exception:
+                pass
             self._camera = None
+        self.preview.clear()
+        if self._on_pi:
+            import gc
+
+            gc.collect()
 
     def closeEvent(self, event) -> None:
         self._release_camera()

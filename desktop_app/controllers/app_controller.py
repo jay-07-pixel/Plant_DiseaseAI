@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 from pathlib import Path
@@ -14,8 +15,8 @@ from desktop_app.services.model_manager import ModelManager
 from desktop_app.services.workers import GroqWorker, InferenceWorker, ModelLoadWorker
 from desktop_app.widgets.camera_dialog import CameraCaptureDialog
 from inference.explainable_predictor import ExplainablePredictionResult
-from utils.platform import prepare_image_for_pi_inference
 from utils.config import AppConfig
+from utils.platform import prepare_image_for_pi_inference
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class AppController:
         self._current_image_path: Path | None = None
         self._last_result: ExplainablePredictionResult | None = None
         self._inference_generation = 0
+        self._busy = False
 
         self._bind_window()
 
@@ -51,6 +53,21 @@ class AppController:
 
     def _t(self, key: str, **kwargs) -> str:
         return self.window.translator.t(key, **kwargs)
+
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        self.window.upload_btn.setEnabled(not busy)
+        self.window.capture_btn.setEnabled(not busy)
+
+    def _cleanup_memory(self) -> None:
+        gc.collect()
+        try:
+            import torch
+
+            if hasattr(torch, "cuda") and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
     def start_model_loading(self) -> None:
         self._load_crop_model(self._current_crop)
@@ -97,6 +114,8 @@ class AppController:
         )
 
     def on_upload(self) -> None:
+        if self._busy:
+            return
         path, _ = QFileDialog.getOpenFileName(
             self.window,
             self._t("file_dialog.select_leaf"),
@@ -107,11 +126,17 @@ class AppController:
             self.run_inference(Path(path))
 
     def on_capture(self) -> None:
+        if self._busy:
+            return
+        # Free RAM before opening the camera again (important after 1st capture).
+        self._cleanup_memory()
         dialog = CameraCaptureDialog(self.config, self.window.translator, self.window)
-        if dialog.exec() and dialog.captured_path:
-            # Capture file is under project_root/logs/captures (pendrive when app
-            # is launched from the USB project folder).
-            self.run_inference(dialog.captured_path)
+        accepted = dialog.exec()
+        captured = dialog.captured_path
+        dialog.deleteLater()
+        self._cleanup_memory()
+        if accepted and captured:
+            self.run_inference(captured)
 
     def run_inference(self, image_path: Path) -> None:
         selected_crop = self.window.left_panel.selected_crop()
@@ -136,6 +161,9 @@ class AppController:
             )
             return
 
+        if self._busy:
+            return
+
         self._inference_generation += 1
         inference_generation = self._inference_generation
         prepared = prepare_image_for_pi_inference(
@@ -152,6 +180,7 @@ class AppController:
                 self.service.crop_name,
                 self.service.weights_path,
             )
+        self._set_busy(True)
         self.window.set_inference_running(prepared)
         self._inference_worker = InferenceWorker(
             self.service,
@@ -164,6 +193,7 @@ class AppController:
         self._inference_worker.start()
 
     def _on_inference_finished(self, generation: int, result: ExplainablePredictionResult) -> None:
+        self._set_busy(False)
         if generation != self._inference_generation:
             logger.info("Discarding stale inference result (crop changed during prediction)")
             return
@@ -184,11 +214,16 @@ class AppController:
             result.predicted_class,
             result.confidence,
         )
+        self._cleanup_memory()
         self._request_groq_explanation(result)
 
     def _request_groq_explanation(self, result: ExplainablePredictionResult) -> None:
         if self._current_image_path is None:
             return
+
+        # Avoid overlapping Groq workers on repeated captures.
+        if self._groq_worker is not None and self._groq_worker.isRunning():
+            self._groq_worker.wait(1000)
 
         self.window.set_groq_loading()
         crop_display = self.window.left_panel.selected_crop_display()
@@ -227,6 +262,8 @@ class AppController:
         self.window.display_groq_unavailable()
 
     def _on_inference_error(self, error: str) -> None:
+        self._set_busy(False)
+        self._cleanup_memory()
         self.window.set_inference_error(error)
         logger.error("Inference error: %s", error)
         QMessageBox.critical(

@@ -55,9 +55,12 @@ class ImageDisplay(QFrame):
 
     def set_image(self, path: Path | str | None) -> None:
         self._current_path = path
+        # Drop previous pixmap before loading a new one (helps repeated captures on Pi).
+        self.image_label.clear()
+        self.image_label.setPixmap(QPixmap())
+
         if path is None or not Path(path).exists():
             self.image_label.setText(self.translator.t("image_panel.no_image"))
-            self.image_label.setPixmap(QPixmap())
             return
 
         pixmap = QPixmap(str(path))
@@ -68,11 +71,18 @@ class ImageDisplay(QFrame):
         self._apply_scaled_pixmap(pixmap)
 
     def _apply_scaled_pixmap(self, pixmap: QPixmap) -> None:
+        from utils.platform import is_raspberry_pi
+
+        mode = (
+            Qt.TransformationMode.FastTransformation
+            if is_raspberry_pi()
+            else Qt.TransformationMode.SmoothTransformation
+        )
         scaled = pixmap.scaled(
             max(self.image_label.width() - 8, 1),
             max(self.image_label.height() - 8, 1),
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            mode,
         )
         self.image_label.setPixmap(scaled)
         self.image_label.setText("")
